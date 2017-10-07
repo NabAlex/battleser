@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.6)
 project(main)
 
-# add_definitions(-DDEBUG=1)
+add_definitions(-DDEBUG=1)
 
 set(CMAKE_C_STANDARD 11)
 

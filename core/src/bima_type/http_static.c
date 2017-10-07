@@ -4,6 +4,7 @@ static char __buf[256];
 static int32_t __buf_len;
 
 static char *dir;
+static char *dfile;
 
 #define MAX_FILES 100
 
@@ -15,6 +16,7 @@ http_static_release(void)
 {
     log_w("delete static dir");
     free(dir);
+    free(dfile);
     free(desc_array);
     /* todo remove hashmap */
 }
@@ -24,8 +26,17 @@ static int32_t d;
 static int32_t
 read_parser(conn_t *cn, http_request_t *request)
 {
+    char *file;
+
+    /* TODO normal path !!! */
+    file = request->head.url + 1;
+    if (!*file)
+        file = dfile;
+
+    log_w("%s", dfile);
+
     int32_t *desc = NULL;
-    int32_t r = hashmap_get(descriptors, "index.html", &desc);
+    int32_t r = hashmap_get(descriptors, file, &desc);
     if (r != MAP_OK)
         return http_send_data(cn, HTTP_NOTFOUND);
 
@@ -36,9 +47,11 @@ read_parser(conn_t *cn, http_request_t *request)
 }
 
 void
-http_start_static_server(char *filedir)
+http_start_static_server(char *filedir, char *default_file)
 {
     dir = strdup(filedir);
+    dfile = (default_file) ? strdup(default_file) : strdup("index.html");
+
     descriptors = hashmap_new();
 
     DIR *dp;

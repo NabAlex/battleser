@@ -3,6 +3,9 @@
 
 #define MOD_BIMA "[BIMA] "
 
+#define BIMA_USE_SIMPLE  0s
+#define BIMA_USE_THREADS (1 << 0)
+
 typedef struct client
 {
     struct sockaddr uaddr;

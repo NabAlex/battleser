@@ -69,7 +69,6 @@ http_parser(conn_t *cn)
     int32_t res = RES_OK;
     if (!cn || !cn->out_len)
         return RES_ERR;
-
     assert(cn->out);
 
     http_request_t *request = http_response_init();

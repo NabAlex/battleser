@@ -4,7 +4,7 @@
 
 int main(int argc, char **argv)
 {
-    http_start_static_server("/home/alex/CLionProjects/bfcom/battleser/static");
+    http_start_static_server("/home/alex/CLionProjects/bfcom/battleser/static", NULL);
 }
 
 #endif

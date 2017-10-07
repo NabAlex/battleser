@@ -27,13 +27,13 @@ http_send_data(conn_t *cn, http_status_t status)
     __buf_len = snprintf(__buf, sizeof(__buf),
             "HTTP/1.1 %d %s\r\n"
             "Server: bima\r\n"
+            "Content-Length: 5\r\n"
             "\r\n"
-            "<html><body>Redirect...</body></html>",
+            "Error",
             status, http_response_get_status_name(status));
 
     xassert(__buf_len > 0, "buffer is too short");
     bima_write(cn, __buf, __buf_len);
-    bima_connection_close(cn);
     return RES_OK;
 }
 
@@ -43,15 +43,16 @@ http_send_file(conn_t *cn, http_status_t status, int32_t in_fd)
     struct stat stat_buf;
     off_t offset = 0;
 
+    fstat(in_fd, &stat_buf);
+
     __buf_len = snprintf(__buf, sizeof(__buf),
-        "HTTP/1.1 %d %s\r\n"
-        "Server: bima\r\n"
-        "\r\n",
-        status, http_response_get_status_name(status));
+            "HTTP/1.1 %d %s\r\n"
+            "Server: bima\r\n"
+            "Content-Length: %ld\r\n\r\n",
+            status, http_response_get_status_name(status),
+            stat_buf.st_size);
 
     bima_write(cn, __buf, __buf_len);
-
-    fstat(in_fd, &stat_buf);
 
     while(offset < stat_buf.st_size) {
         if(sendfile(cn->fd, in_fd, &offset, stat_buf.st_size - offset) == -1) {
@@ -61,6 +62,5 @@ http_send_file(conn_t *cn, http_status_t status, int32_t in_fd)
         }
     }
 
-    bima_connection_close(cn);
     return RES_OK;
 }

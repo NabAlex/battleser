@@ -1,5 +1,7 @@
 #include "core.h"
 
+#include <linux/aio_abi.h>
+
 static response_callback main_callback;
 
 #define MAX_EVENTS  65536
@@ -76,7 +78,7 @@ bind_epoll(char *port)
     int s, sfd = -1;
     
     memset(&hints, 0, sizeof(struct addrinfo));
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
     
@@ -131,15 +133,14 @@ set_socket_non_block(int sfd)
     flags = fcntl(sfd, F_GETFL, 0);
     if (flags == -1)
     {
-        perror("fcntl");
+        log_e("fcntl");
         return -1;
     }
-    
-    flags |= O_NONBLOCK;
-    s = fcntl(sfd, F_SETFL, flags);
+
+    s = fcntl(sfd, F_SETFL, flags | O_NONBLOCK);
     if (s == -1)
     {
-        perror("fcntl");
+        log_e("fcntl");
         return -1;
     }
     
@@ -164,71 +165,75 @@ error:
     return RES_ERR;
 }
 
-static conn_t *
-bima_connection_accept(int epolld, struct epoll_event *ev)
+static int32_t
+bima_connection_accept(struct epoll_event *ev)
 {
-    if(ev == NULL)
-        goto error;
-    
+    assert(ev);
+
     struct sockaddr in_addr;
     socklen_t in_len;
     int infd, tmp;
-    
-    in_len = sizeof(in_addr);
-    infd = accept(cored, &in_addr, &in_len);
-    if(infd == -1)
+
+    while (true)
     {
-        if ((errno == EAGAIN) ||
-            (errno == EWOULDBLOCK))
+        in_len = sizeof(in_addr);
+        infd = accept(cored, &in_addr, &in_len);
+        if (infd == -1)
         {
-            /* close accept connection */
-            return NULL;
+            if ((errno == EAGAIN) ||
+                (errno == EWOULDBLOCK))
+            {
+                /* read all connections */
+                break;
+            }
+            else
+            {
+                log_e(MOD_BIMA
+                    ": cannot accept connection!");
+                return RES_ERR;
+            }
         }
-        else
-        {
-            log_e(MOD_BIMA": cannot accept connection!");
-            return NULL;
-        }
-    }
 
 #ifdef DEBUG
-    static char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+        static char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
 
-    tmp = getnameinfo(&in_addr, in_len, hbuf, sizeof(hbuf),
-        sbuf, sizeof(sbuf),
-        NI_NUMERICHOST | NI_NUMERICSERV);
-    if (tmp == 0)
-    {
-        log_d(MOD_BIMA": Accepted connection on descriptor %d "
-            "(host=%s, port=%s)", infd, hbuf, sbuf);
-    }
+        tmp = getnameinfo(&in_addr, in_len, hbuf, sizeof(hbuf),
+            sbuf, sizeof(sbuf),
+            NI_NUMERICHOST | NI_NUMERICSERV);
+        if (tmp == 0)
+        {
+            log_d(MOD_BIMA
+                ": Accepted connection on descriptor %d "
+                    "(host=%s, port=%s)", infd, hbuf, sbuf);
+        }
 #endif
 
-    tmp = set_socket_non_block(infd);
-    if(tmp == -1)
-    {
-        log_e(MOD_BIMA": cannot create non block");
-        goto error;
+        tmp = set_socket_non_block(infd);
+        if (tmp == -1)
+        {
+            log_e(MOD_BIMA
+                ": cannot create non block");
+            return RES_ERR;
+        }
+
+
+        /* edge-triggered mode */
+        if (add_fd_vision(epoll_fd, infd) == -1)
+        {
+            log_e(MOD_BIMA
+                ": cannot EPOLL_CTL_ADD");
+            return RES_ERR;
+        }
+
+        conn_t *cn = get_connection(infd);
+
+        static int32_t unique_id = -1;
+        cn->id = ++unique_id;
+        cn->fd = infd;
+        cn->client_info.uaddr = in_addr;
     }
 
-    /* edge-triggered mode */
-    if (add_fd_vision(epolld, infd) == -1)
-    {
-        log_e(MOD_BIMA": cannot EPOLL_CTL_ADD");
-        abort();
-    }
-
-    conn_t *cn = get_connection(infd);
-
-    static int32_t unique_id = -1;
-    cn->id = ++unique_id;
-    cn->fd = infd;
-    cn->client_info.uaddr = in_addr;
-
-    return cn;
-
-error:
-    return NULL;
+    return RES_OK;
 }
 
 void
@@ -236,7 +241,6 @@ bima_main_loop()
 {
     xassert(cored >= 0, "none socket");
 
-    conn_t *user_cn;
     int32_t res = RES_OK, tmp, count_clients;
     
     tmp = listen(cored, SOMAXCONN);
@@ -257,14 +261,15 @@ bima_main_loop()
     log_d(MOD_BIMA": START SERVER!");
 
     bima_catch_exit();
+
+    /* TODO (a.naberezhnyi) EPOLLONESHOT */
     while(1)
     {
         count_clients = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
         for(int i = 0; i < count_clients; i++)
         {
             if ((events[i].events & EPOLLERR) ||
-                (events[i].events & EPOLLHUP) ||
-                (!(events[i].events & EPOLLIN)))
+                (events[i].events & EPOLLHUP /* TODO disconnect */ ))
             {
                 log_e(MOD_BIMA": EPOLLERR");
                 close(events->data.fd);
@@ -273,41 +278,66 @@ bima_main_loop()
             else
             if(cored == events[i].data.fd)
             {
-                user_cn = bima_connection_accept(epoll_fd, &events[i]);
-                if (!user_cn)
+                if (bima_connection_accept(&events[i]) == RES_ERR)
                     log_e(MOD_BIMA": cannot accept connection");
             }
             else
+            if (events[i].events & EPOLLIN)
             {
                 char buf[512];
+                ssize_t r_len = 0;
 
                 conn_t *cn = get_connection(events[i].data.fd);
                 cn->out = buf;
-                cn->out_len = read(cn->fd, buf, sizeof(buf));
-                if (cn->out_len < 0)
+                cn->out_len = 0;
+
+                while (true)
                 {
-                    log_e("packet loss!");
-                    if (errno != EAGAIN)
-                        bima_connection_close(cn);
-                    continue;
-                }
-                else if (cn->out_len == 0)
-                {
-                    bima_connection_close(cn);
-                    continue;
+                    if ((r_len = read(cn->fd, buf, sizeof(buf))) < 0)
+                    {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        {
+                            log_d("normal exit read");
+                            break;
+                        }
+
+                        log_e("packet loss!");
+                        assert(0);
+                        break;
+                    }
+
+                    cn->out_len += r_len;
                 }
 
+                if (cn->out_len <= 0)
+                    continue;
+
                 // log_d("count %ld -> %s\n", cn->out_len, buf);
+
+                /* TODO (a.naberezhnyi) check http */
+
+                /* kill me! ab -n 10000 -c 10 -r http://127.0.0.1:3000/ */
+                /* TODO (a.naberezhnyi) too slow new object */
+                static struct epoll_event event;
+                event.data.fd = cn->fd;
+                event.events = EPOLLOUT; // TODO (a.naberezhnyi) wtf? | EPOLLET;
+                epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cn->fd, &event);
+            }
+            else
+            if (events[i].events & EPOLLOUT)
+            {
+                conn_t *cn = get_connection(events[i].data.fd);
 
                 res = main_callback(cn);
                 if (res == RES_OK)
                     log_d("RES_OK");
                 else
                 {
-                    bima_connection_close(cn);
                     log_d("RES_ERR");
                 }
 
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, cn->fd, NULL);
+                bima_connection_close(cn);
             }
         }
     }
@@ -332,4 +362,5 @@ bima_connection_close(conn_t *cn)
         cn->fd);
 
     close(cn->fd);
+    // shutdown(cn->fd, SHUT_RDWR);
 }
