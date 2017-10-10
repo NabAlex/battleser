@@ -2,7 +2,8 @@
 
 #include <linux/aio_abi.h>
 
-static response_callback main_callback;
+static reader_callback reader_handler;
+static response_callback main_handler;
 
 #define MAX_EVENTS  65536
 #define MAX_CLIENTS 65536
@@ -15,13 +16,15 @@ static int32_t epoll_fd = -1;
 
 struct epoll_event *events;
 
+static void debug_epoll_event(struct epoll_event ev);
+
 static void
 init_connections()
 {
     connections = (conn_t*) xmalloc(MAX_CLIENTS * sizeof(conn_t));
     bzero(connections, MAX_CLIENTS * sizeof(conn_t));
     for (int32_t i = 0; i < MAX_CLIENTS; i++)
-        connections[i].id = -1;
+        connections[i].id = CONNECT_UNUSED;
 }
 
 static inline conn_t *
@@ -117,12 +120,30 @@ bind_epoll(char *port)
 }
 
 static int
-add_fd_vision(int epolld, int _fd)
+bima_add_event(int _fd, uint32_t events)
 {
     static struct epoll_event event;
     event.data.fd = _fd;
-    event.events = EPOLLIN | EPOLLET;
-    return epoll_ctl(epolld, EPOLL_CTL_ADD, _fd, &event);
+    event.events = events;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, _fd, &event);
+}
+
+int
+bima_remove_event(int _fd)
+{
+    static struct epoll_event event;
+    event.data.fd = 0;
+    event.events = NULL;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_DEL, _fd, &event);
+}
+
+int
+bima_change_event(int _fd, uint32_t events)
+{
+    static struct epoll_event event;
+    event.data.fd = _fd;
+    event.events = events;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_MOD, _fd, &event);
 }
 
 static int
@@ -152,18 +173,22 @@ bima_init(response_callback callback)
 {
     init_connections();
 
-    main_callback = callback;
+    main_handler = callback;
     
     if((cored = bind_epoll("3000")) < 0)
         goto error;
     
     if(set_socket_non_block(cored) < 0)
         goto error;
-    
+
+    reader_handler = NULL;
     return RES_OK;
 error:
     return RES_ERR;
 }
+
+void
+bima_set_reader(reader_callback _reader) { reader_handler = _reader; }
 
 static int32_t
 bima_connection_accept(struct epoll_event *ev)
@@ -218,7 +243,7 @@ bima_connection_accept(struct epoll_event *ev)
 
 
         /* edge-triggered mode */
-        if (add_fd_vision(epoll_fd, infd) == -1)
+        if (bima_add_event(infd, EPOLLIN | EPOLLET) == -1)
         {
             log_e(MOD_BIMA
                 ": cannot EPOLL_CTL_ADD");
@@ -241,7 +266,7 @@ bima_main_loop()
 {
     xassert(cored >= 0, "none socket");
 
-    int32_t res = RES_OK, tmp, count_clients;
+    int32_t tmp, count_clients;
     
     tmp = listen(cored, SOMAXCONN);
     assert(tmp != -1);
@@ -256,7 +281,7 @@ bima_main_loop()
     events = calloc(MAX_EVENTS, sizeof(struct epoll_event));
 
     /* add me */
-    xassert(add_fd_vision(epoll_fd, cored) == 0, MOD_BIMA": cannot add element to epoll");
+    bima_add_event(cored, EPOLLIN | EPOLLET);
 
     log_d(MOD_BIMA": START SERVER!");
 
@@ -268,43 +293,85 @@ bima_main_loop()
         count_clients = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
         for(int i = 0; i < count_clients; i++)
         {
-            if ((events[i].events & EPOLLERR) ||
-                (events[i].events & EPOLLHUP /* TODO disconnect */ ))
+            int32_t res;
+            conn_t *cn = get_connection(events[i].data.fd);
+
+            if (events[i].events & EPOLLERR ||
+                cn->id == CONNECT_DONE)
             {
-                log_e(MOD_BIMA": EPOLLERR");
-                close(events->data.fd);
+                /*************************/
+                /* this events is assert */
+                /*************************/
+                log_e("epoll fail!");
+                bima_connection_close(cn);
                 continue;
+            }
+
+            if (events[i].events & ~(EPOLLHUP | EPOLLOUT | EPOLLIN))
+            {
+                log_e("strange event!");
+                bima_connection_close(cn);
+                continue;
+            }
+
+            /* main part */
+            if (events[i].events & EPOLLHUP)
+            {
+                /**************/
+                /* disconnect */
+                /**************/
+                log_d("disconnect %d", cn->fd);
+                if (reader_handler && cn->add_buf && cn->add_buf_len)
+                {
+                    res = reader_handler(cn, cn->add_buf, cn->add_buf_len);
+                    if (res == RES_OK)
+                    {
+                        cn->id = CONNECT_UNUSED;
+                        /* TODO (a.naberezhnyi) check this! */
+                        xassert(main_handler(cn) == RES_OK,
+                            "wrong main_handler if user close socket");
+                    }
+                }
             }
             else
             if(cored == events[i].data.fd)
             {
-                if (bima_connection_accept(&events[i]) == RES_ERR)
+                if (bima_connection_accept(&events[i]) != RES_OK)
                     log_e(MOD_BIMA": cannot accept connection");
             }
             else
             if (events[i].events & EPOLLIN)
             {
-                char buf[512];
                 ssize_t r_len = 0;
 
-                conn_t *cn = get_connection(events[i].data.fd);
+                char buf[512];
                 cn->out = buf;
                 cn->out_len = 0;
 
+                if (cn->add_buf && cn->add_buf_len)
+                {
+                    xmemmove(cn->out, cn->add_buf, cn->add_buf_len);
+                    cn->out_len = cn->add_buf_len;
+                }
+
                 while (true)
                 {
-                    if ((r_len = read(cn->fd, buf, sizeof(buf))) < 0)
+                    if ((r_len = read(cn->fd, buf + cn->out_len, sizeof(buf) - cn->out_len)) < 0)
                     {
-                        if (errno == EAGAIN || errno == EWOULDBLOCK)
-                        {
-                            log_d("normal exit read");
+                        /* TODO check read full */
+                        if (errno == EWOULDBLOCK)
                             break;
-                        }
 
-                        log_e("packet loss!");
-                        assert(0);
+                        if (errno == EAGAIN)
+                            continue;
+
+                        /* strange error */
+                        bima_connection_close(cn);
                         break;
                     }
+
+                    if (r_len == 0)
+                        break;
 
                     cn->out_len += r_len;
                 }
@@ -312,23 +379,40 @@ bima_main_loop()
                 if (cn->out_len <= 0)
                     continue;
 
-                // log_d("count %ld -> %s\n", cn->out_len, buf);
+                if (reader_handler)
+                {
+                    res = reader_handler(cn, cn->out, cn->out_len);
+                    if (res == RES_AGAIN)
+                    {
+                        if (!cn->add_buf)
+                            cn->add_buf = malloc(cn->out_len);
+                        else
+                            cn->add_buf = realloc(cn->add_buf, cn->add_buf_len + cn->out_len);
+
+                        xmemmove(cn->add_buf + cn->add_buf_len, cn->out, cn->out_len);
+                        cn->add_buf_len += cn->out_len;
+                        continue;
+                    }
+
+                    if (res != RES_OK)
+                    {
+                        bima_connection_close(cn);
+                        continue;
+                    }
+                }
 
                 /* TODO (a.naberezhnyi) check http */
 
                 /* kill me! ab -n 10000 -c 10 -r http://127.0.0.1:3000/ */
                 /* TODO (a.naberezhnyi) too slow new object */
-                static struct epoll_event event;
-                event.data.fd = cn->fd;
-                event.events = EPOLLOUT; // TODO (a.naberezhnyi) wtf? | EPOLLET;
-                epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cn->fd, &event);
+
+                /* TODO need i use epollet? */
+                bima_change_event(cn->fd, EPOLLOUT | EPOLLET);
             }
             else
             if (events[i].events & EPOLLOUT)
             {
-                conn_t *cn = get_connection(events[i].data.fd);
-
-                res = main_callback(cn);
+                res = main_handler(cn);
                 if (res == RES_OK)
                     log_d("RES_OK");
                 else
@@ -336,21 +420,40 @@ bima_main_loop()
                     log_d("RES_ERR");
                 }
 
-                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, cn->fd, NULL);
                 bima_connection_close(cn);
             }
         }
     }
 }
 
+/* please, dont check this method */
 int32_t
 bima_write(conn_t *cn, char *buf, size_t buf_len)
 {
-    if (!cn)
-        return RES_ERR;
+    if (!cn || cn->id < 0)
+        return RES_FAIL;
 
     if (write(cn->fd, buf, buf_len) < 0)
         return RES_ERR;
+
+    return RES_OK;
+}
+
+int32_t
+bima_write_descriptor(conn_t *cn, int32_t dscr, size_t dscr_size)
+{
+    if (!cn || cn->id < 0)
+        return RES_FAIL;
+
+    off_t offset = 0;
+    while (offset < dscr_size)
+    {
+        if (sendfile(cn->fd, dscr, &offset, dscr_size - offset) < 0)
+        {
+            log_e("sendfile error to %d", dscr);
+            return RES_ERR;
+        }
+    }
 
     return RES_OK;
 }
@@ -361,6 +464,50 @@ bima_connection_close(conn_t *cn)
     log_d(MOD_BIMA": Closed connection on descriptor %d",
         cn->fd);
 
+    bima_remove_event(cn->fd);
+
     close(cn->fd);
+    cn->id = CONNECT_DONE;
+
+    cn->out = NULL;
+    cn->out_len = 0;
+
+    free(cn->add_buf);
+    cn->add_buf = NULL;
+    cn->add_buf_len = 0;
     // shutdown(cn->fd, SHUT_RDWR);
+}
+
+static void debug_epoll_event(struct epoll_event ev)
+{
+#ifdef DEBUG
+    printf("fd(%d), ev.events:", ev.data.fd);
+
+    if(ev.events & EPOLLIN)
+        printf(" EPOLLIN ");
+    if(ev.events & EPOLLOUT)
+        printf(" EPOLLOUT ");
+    if(ev.events & EPOLLET)
+        printf(" EPOLLET ");
+    if(ev.events & EPOLLPRI)
+        printf(" EPOLLPRI ");
+    if(ev.events & EPOLLRDNORM)
+        printf(" EPOLLRDNORM ");
+    if(ev.events & EPOLLRDBAND)
+        printf(" EPOLLRDBAND ");
+    if(ev.events & EPOLLWRNORM)
+        printf(" EPOLLRDNORM ");
+    if(ev.events & EPOLLWRBAND)
+        printf(" EPOLLWRBAND ");
+    if(ev.events & EPOLLMSG)
+        printf(" EPOLLMSG ");
+    if(ev.events & EPOLLERR)
+        printf(" EPOLLERR ");
+    if(ev.events & EPOLLHUP)
+        printf(" EPOLLHUP ");
+    if(ev.events & EPOLLONESHOT)
+        printf(" EPOLLONESHOT ");
+
+    printf("\n");
+#endif
 }

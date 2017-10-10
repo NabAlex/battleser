@@ -41,7 +41,6 @@ int32_t
 http_send_file(conn_t *cn, http_status_t status, int32_t in_fd)
 {
     struct stat stat_buf;
-    off_t offset = 0;
 
     fstat(in_fd, &stat_buf);
 
@@ -52,15 +51,7 @@ http_send_file(conn_t *cn, http_status_t status, int32_t in_fd)
             status, http_response_get_status_name(status),
             stat_buf.st_size);
 
-    bima_write(cn, __buf, __buf_len);
-
-    while(offset < stat_buf.st_size) {
-        if(sendfile(cn->fd, in_fd, &offset, stat_buf.st_size - offset) == -1) {
-            /* TODO normal */
-            assert(errno == EINTR);
-            continue;
-        }
-    }
-
+    assert(bima_write(cn, __buf, __buf_len) == RES_OK);
+    assert(bima_write_descriptor(cn, in_fd, stat_buf.st_size) == RES_OK);
     return RES_OK;
 }

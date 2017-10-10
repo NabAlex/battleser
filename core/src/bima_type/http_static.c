@@ -33,7 +33,7 @@ read_parser(conn_t *cn, http_request_t *request)
     if (!*file)
         file = dfile;
 
-    log_w("%s", dfile);
+    log_d("%s", dfile);
 
     int32_t *desc = NULL;
     int32_t r = hashmap_get(descriptors, file, &desc);
@@ -86,6 +86,8 @@ http_start_static_server(char *filedir, char *default_file)
     closedir(dp);
 
     atexit(http_static_release);
+
+    aio_context_t *aio_context;
 
     log_w("start server: %s", dir);
     http_start_server(read_parser);

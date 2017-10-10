@@ -125,11 +125,18 @@ out:
     return http_local_callback(cn, request);
 }
 
+int32_t
+http_reader(conn_t *cn, const char *buf, uint32_t buf_len)
+{
+    return (strnstr(buf, "\r\n\r\n", buf_len)) ? RES_OK : RES_AGAIN;
+}
+
 void
 http_start_server(http_callback callback)
 {
     http_local_callback = callback;
 
     bima_init(http_parser);
+    bima_set_reader(http_reader);
     bima_main_loop();
 }
