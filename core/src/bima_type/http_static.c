@@ -49,6 +49,8 @@ read_parser(conn_t *cn, http_request_t *request)
 void
 http_start_static_server(char *filedir, char *default_file)
 {
+    atexit(http_static_release);
+
     dir = strdup(filedir);
     dfile = (default_file) ? strdup(default_file) : strdup("index.html");
 
@@ -84,10 +86,6 @@ http_start_static_server(char *filedir, char *default_file)
     }
 
     closedir(dp);
-
-    atexit(http_static_release);
-
-    aio_context_t *aio_context;
 
     log_w("start server: %s", dir);
     http_start_server(read_parser);

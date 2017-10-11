@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include<ctype.h>
+#include <unistd.h>
 
 #include <signal.h>
 #include <dirent.h>
@@ -23,11 +24,7 @@
 #include "util.h"
 
 /* if need http server */
-#include <linux/aio_abi.h>
-
-/* libraries */
-#include "lib_aio.h"
-/*************/
+#include <libaio.h>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -46,7 +43,10 @@
 #include "log.h"
 /*** local std ***/
 
+#include "bima_aio.h"
+
 #include "bima.h"
+
 #include "bima_type/http.h"
 #include "bima_type/http_response.h"
 #include "bima_type/http_static.h"

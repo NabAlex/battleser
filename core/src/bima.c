@@ -1,18 +1,17 @@
 #include "core.h"
 
-#include <linux/aio_abi.h>
-
 static reader_callback reader_handler;
 static response_callback main_handler;
 
-#define MAX_EVENTS  65536
-#define MAX_CLIENTS 65536
+#define MAX_EVENTS  65535
+#define MAX_CLIENTS 65535
 conn_t *connections;
 
 static int cored = -1;
 
 /* epoll descriptor */
 static int32_t epoll_fd = -1;
+static int32_t aio_fd = -1;
 
 struct epoll_event *events;
 
@@ -122,7 +121,7 @@ bind_epoll(char *port)
 static int
 bima_add_event(int _fd, uint32_t events)
 {
-    static struct epoll_event event;
+    static struct epoll_event event = {};
     event.data.fd = _fd;
     event.events = events;
     return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, _fd, &event);
@@ -166,25 +165,6 @@ set_socket_non_block(int sfd)
     }
     
     return 0;
-}
-
-int
-bima_init(response_callback callback)
-{
-    init_connections();
-
-    main_handler = callback;
-    
-    if((cored = bind_epoll("3000")) < 0)
-        goto error;
-    
-    if(set_socket_non_block(cored) < 0)
-        goto error;
-
-    reader_handler = NULL;
-    return RES_OK;
-error:
-    return RES_ERR;
 }
 
 void
@@ -261,38 +241,66 @@ bima_connection_accept(struct epoll_event *ev)
     return RES_OK;
 }
 
-void
-bima_main_loop()
+int
+bima_init(response_callback callback)
 {
-    xassert(cored >= 0, "none socket");
+    int32_t r;
 
-    int32_t tmp, count_clients;
-    
-    tmp = listen(cored, SOMAXCONN);
-    assert(tmp != -1);
-    
+    init_connections();
+    main_handler = callback;
+    reader_handler = NULL;
+
+    if((cored = bind_epoll("3000")) < 0)
+        goto error;
+
+    if(set_socket_non_block(cored) < 0)
+        goto error;
+
+    r = listen(cored, SOMAXCONN);
+    assert(r != -1);
+
     epoll_fd = epoll_create1(0);
     if(epoll_fd == -1)
     {
         log_e(MOD_BIMA": cannot create epoll");
         abort();
     }
-    
-    events = calloc(MAX_EVENTS, sizeof(struct epoll_event));
 
     /* add me */
     bima_add_event(cored, EPOLLIN | EPOLLET);
 
-    log_d(MOD_BIMA": START SERVER!");
+    /* todo config aio */
+    if ((aio_fd = bima_aio_get_ctx(epoll_fd)) == -1)
+    {
+        log_e("cannot create aio ctx");
+        goto error;
+    }
+
+    bima_add_event(aio_fd, EPOLLIN | EPOLLET);
+    return RES_OK;
+error:
+    return RES_ERR;
+}
+
+void
+bima_main_loop()
+{
+    xassert(cored >= 0, "none socket");
+
+    int32_t count_clients;
+    events = calloc(MAX_EVENTS, sizeof(struct epoll_event));
 
     bima_catch_exit();
 
     /* TODO (a.naberezhnyi) EPOLLONESHOT */
+    log_d(MOD_BIMA": START SERVER!");
     while(1)
     {
         count_clients = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
         for(int i = 0; i < count_clients; i++)
         {
+            debug_epoll_event(events[i]);
+
             int32_t res;
             conn_t *cn = get_connection(events[i].data.fd);
 
@@ -334,10 +342,16 @@ bima_main_loop()
                 }
             }
             else
-            if(cored == events[i].data.fd)
+            if (cored == events[i].data.fd)
             {
                 if (bima_connection_accept(&events[i]) != RES_OK)
                     log_e(MOD_BIMA": cannot accept connection");
+            }
+            else
+            if (aio_fd == events[i].data.fd)
+            {
+                bima_aio_t *l = events[i].data.ptr;
+                log_w("!!! %d", l->id);
             }
             else
             if (events[i].events & EPOLLIN)
@@ -416,11 +430,7 @@ bima_main_loop()
                 if (res == RES_OK)
                     log_d("RES_OK");
                 else
-                {
                     log_d("RES_ERR");
-                }
-
-                bima_connection_close(cn);
             }
         }
     }
@@ -445,6 +455,9 @@ bima_write_descriptor(conn_t *cn, int32_t dscr, size_t dscr_size)
     if (!cn || cn->id < 0)
         return RES_FAIL;
 
+    return bima_aio_write(cn->fd, STRSZ("hello"));
+
+    /*
     off_t offset = 0;
     while (offset < dscr_size)
     {
@@ -455,7 +468,7 @@ bima_write_descriptor(conn_t *cn, int32_t dscr, size_t dscr_size)
         }
     }
 
-    return RES_OK;
+    return RES_OK;*/
 }
 
 void
