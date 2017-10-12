@@ -12,6 +12,8 @@
 #include<ctype.h>
 #include <unistd.h>
 
+#include <inttypes.h>
+
 #include <signal.h>
 #include <dirent.h>
 
@@ -41,6 +43,7 @@
 #include "hashmap.h"
 #include "mem.h"
 #include "log.h"
+#include "bima_alloca.h"
 /*** local std ***/
 
 #include "bima_aio.h"

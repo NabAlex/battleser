@@ -33,10 +33,11 @@ read_parser(conn_t *cn, http_request_t *request)
     if (!*file)
         file = dfile;
 
-    log_d("%s", dfile);
+    log_d("%s", file);
 
     int32_t *desc = NULL;
     int32_t r = hashmap_get(descriptors, file, &desc);
+    assert(r == MAP_OK);
     if (r != MAP_OK)
         return http_send_data(cn, HTTP_NOTFOUND);
 

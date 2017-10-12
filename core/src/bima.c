@@ -23,7 +23,9 @@ init_connections()
     connections = (conn_t*) xmalloc(MAX_CLIENTS * sizeof(conn_t));
     bzero(connections, MAX_CLIENTS * sizeof(conn_t));
     for (int32_t i = 0; i < MAX_CLIENTS; i++)
+    {
         connections[i].id = CONNECT_UNUSED;
+    }
 }
 
 static inline conn_t *
@@ -124,6 +126,21 @@ bima_add_event(int _fd, uint32_t events)
     static struct epoll_event event = {};
     event.data.fd = _fd;
     event.events = events;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, _fd, &event);
+}
+
+static int
+bima_add_event_with_ptr(int _fd, uint32_t events, bima_epoll_type_t type, void *ptr)
+{
+    static struct epoll_event event = {};
+    event.data.fd = _fd;
+    event.events = events;
+
+    bima_epoll_data_t *data = calloc(1, sizeof(*data));
+    data->type = type;
+    data->alloc_ptr = ptr;
+
+    connections[_fd].epoll_ptr = data;
     return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, _fd, &event);
 }
 
@@ -241,6 +258,12 @@ bima_connection_accept(struct epoll_event *ev)
     return RES_OK;
 }
 
+static int32_t
+bima_add_aio_context(bima_aio_context_t *aio)
+{
+    return bima_add_event_with_ptr(aio->fd, EPOLLIN | EPOLLET, BIMA_AIO_CTX, aio);
+}
+
 int
 bima_init(response_callback callback)
 {
@@ -269,14 +292,11 @@ bima_init(response_callback callback)
     /* add me */
     bima_add_event(cored, EPOLLIN | EPOLLET);
 
-    /* todo config aio */
-    if ((aio_fd = bima_aio_get_ctx(epoll_fd)) == -1)
+    if (bima_aio_init(bima_add_aio_context) != RES_OK)
     {
-        log_e("cannot create aio ctx");
+        log_e("cannot init aio");
         goto error;
     }
-
-    bima_add_event(aio_fd, EPOLLIN | EPOLLET);
     return RES_OK;
 error:
     return RES_ERR;
@@ -297,14 +317,14 @@ bima_main_loop()
     while(1)
     {
         count_clients = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
-        for(int i = 0; i < count_clients; i++)
+        for(int event_id = 0; event_id < count_clients; event_id++)
         {
-            debug_epoll_event(events[i]);
+            debug_epoll_event(events[event_id]);
 
             int32_t res;
-            conn_t *cn = get_connection(events[i].data.fd);
+            conn_t *cn = get_connection(events[event_id].data.fd);
 
-            if (events[i].events & EPOLLERR ||
+            if (events[event_id].events & EPOLLERR ||
                 cn->id == CONNECT_DONE)
             {
                 /*************************/
@@ -315,15 +335,40 @@ bima_main_loop()
                 continue;
             }
 
-            if (events[i].events & ~(EPOLLHUP | EPOLLOUT | EPOLLIN))
+            if (events[event_id].events & ~(EPOLLHUP | EPOLLOUT | EPOLLIN))
             {
                 log_e("strange event!");
                 bima_connection_close(cn);
                 continue;
             }
 
+            if (cn->epoll_ptr != NULL)
+            {
+                bima_epoll_data_t *data = cn->epoll_ptr;
+                if (data->type == BIMA_AIO_CTX)
+                {
+                    bima_aio_context_t *aio = data->alloc_ptr;
+
+                    struct io_event *aio_events = NULL;
+                    int32_t r = bima_aio_get_events(aio, &aio_events);
+                    if (r > 0 && aio_events != NULL)
+                    {
+                        /* TODO change active */
+                        aio->active = false;
+
+                        for (int32_t i = 0; i < r; i++)
+                            bima_connection_close((conn_t *) aio_events[i].data);
+                    }
+                    else
+                    {
+                        log_e("wrong EPOLLIN with aio!");
+                    }
+                }
+                continue;
+            }
+
             /* main part */
-            if (events[i].events & EPOLLHUP)
+            if (events[event_id].events & EPOLLHUP)
             {
                 /**************/
                 /* disconnect */
@@ -342,19 +387,28 @@ bima_main_loop()
                 }
             }
             else
-            if (cored == events[i].data.fd)
+            if (cored == events[event_id].data.fd)
             {
-                if (bima_connection_accept(&events[i]) != RES_OK)
+                if (bima_connection_accept(&events[event_id]) != RES_OK)
                     log_e(MOD_BIMA": cannot accept connection");
             }
+//            else
+//            if (aio_fd == events[event_id].data.fd)
+//            {
+//                struct io_event *events = NULL;
+//                int32_t r = bima_aio_get_events(&events);
+//                if (r > 0 && events != NULL)
+//                {
+//                    for (int32_t i = 0; i < r; i++)
+//                        bima_connection_close((conn_t *) events[i].data);
+//                }
+//                else
+//                {
+//                    log_e("wrong EPOLLIN with aio!");
+//                }
+//            }
             else
-            if (aio_fd == events[i].data.fd)
-            {
-                bima_aio_t *l = events[i].data.ptr;
-                log_w("!!! %d", l->id);
-            }
-            else
-            if (events[i].events & EPOLLIN)
+            if (events[event_id].events & EPOLLIN)
             {
                 ssize_t r_len = 0;
 
@@ -385,7 +439,10 @@ bima_main_loop()
                     }
 
                     if (r_len == 0)
-                        break;
+                    {
+                        bima_connection_close(cn);
+                        continue;
+                    }
 
                     cn->out_len += r_len;
                 }
@@ -413,6 +470,11 @@ bima_main_loop()
                         bima_connection_close(cn);
                         continue;
                     }
+
+                    /* TODO normal buf :( */
+                    free(cn->add_buf);
+
+                    cn->out = xmemdup(cn->out, cn->out_len);
                 }
 
                 /* TODO (a.naberezhnyi) check http */
@@ -420,11 +482,11 @@ bima_main_loop()
                 /* kill me! ab -n 10000 -c 10 -r http://127.0.0.1:3000/ */
                 /* TODO (a.naberezhnyi) too slow new object */
 
-                /* TODO need i use epollet? */
+                /* TODO need event_id use epollet? */
                 bima_change_event(cn->fd, EPOLLOUT | EPOLLET);
             }
             else
-            if (events[i].events & EPOLLOUT)
+            if (events[event_id].events & EPOLLOUT)
             {
                 res = main_handler(cn);
                 if (res == RES_OK)
@@ -455,9 +517,17 @@ bima_write_descriptor(conn_t *cn, int32_t dscr, size_t dscr_size)
     if (!cn || cn->id < 0)
         return RES_FAIL;
 
-    return bima_aio_write(cn->fd, STRSZ("hello"));
+    /* todo config aio */
 
-    /*
+    // if (dscr_size)
+//    char buf[4096];
+//    for (int i = 0; i < 4096; i++)
+//        buf[i] = 'A';
+//
+//
+//    return bima_aio_write(cn->fd, buf, 4096, cn);
+
+
     off_t offset = 0;
     while (offset < dscr_size)
     {
@@ -468,7 +538,8 @@ bima_write_descriptor(conn_t *cn, int32_t dscr, size_t dscr_size)
         }
     }
 
-    return RES_OK;*/
+    bima_connection_close(cn);
+    return RES_OK;
 }
 
 void
@@ -485,9 +556,15 @@ bima_connection_close(conn_t *cn)
     cn->out = NULL;
     cn->out_len = 0;
 
+
+    free(cn->out);
+    cn->out = NULL;
+    cn->out_len = 0;
+
     free(cn->add_buf);
     cn->add_buf = NULL;
     cn->add_buf_len = 0;
+
     // shutdown(cn->fd, SHUT_RDWR);
 }
 

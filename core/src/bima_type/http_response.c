@@ -47,7 +47,7 @@ http_send_file(conn_t *cn, http_status_t status, int32_t in_fd)
     __buf_len = snprintf(__buf, sizeof(__buf),
             "HTTP/1.1 %d %s\r\n"
             "Server: bima\r\n"
-            "Content-Length: %ld\r\n\r\n",
+            "Content-Length: 4096\r\n\r\n",
             status, http_response_get_status_name(status),
             stat_buf.st_size);
 

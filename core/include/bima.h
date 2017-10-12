@@ -17,6 +17,17 @@ typedef int32_t (*read_parser_t)(string_t stream);
 #define CONNECT_UNUSED      -1
 #define CONNECT_DONE        -2
 
+typedef enum bima_epoll_type
+{
+    BIMA_AIO_CTX
+} bima_epoll_type_t;
+
+typedef struct bima_epoll_data
+{
+    bima_epoll_type_t type;
+    void *alloc_ptr;
+} bima_epoll_data_t;
+
 typedef struct conn
 {
     /**
@@ -24,6 +35,8 @@ typedef struct conn
      */
     int32_t id;
     int32_t fd;
+
+    bima_epoll_data_t *epoll_ptr;
 
     char *out;
     ssize_t out_len;
@@ -50,7 +63,6 @@ bima_set_reader(reader_callback _reader);
 
 void
 bima_main_loop();
-
 
 static int
 bima_add_event(int _fd, uint32_t events);
