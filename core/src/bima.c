@@ -392,21 +392,6 @@ bima_main_loop()
                 if (bima_connection_accept(&events[event_id]) != RES_OK)
                     log_e(MOD_BIMA": cannot accept connection");
             }
-//            else
-//            if (aio_fd == events[event_id].data.fd)
-//            {
-//                struct io_event *events = NULL;
-//                int32_t r = bima_aio_get_events(&events);
-//                if (r > 0 && events != NULL)
-//                {
-//                    for (int32_t i = 0; i < r; i++)
-//                        bima_connection_close((conn_t *) events[i].data);
-//                }
-//                else
-//                {
-//                    log_e("wrong EPOLLIN with aio!");
-//                }
-//            }
             else
             if (events[event_id].events & EPOLLIN)
             {
@@ -512,29 +497,28 @@ bima_write(conn_t *cn, char *buf, size_t buf_len)
 }
 
 int32_t
+bima_write_and_close(conn_t *cn, char *buf, size_t buf_len)
+{
+    int32_t r;
+    if ((r = bima_write(cn, buf, buf_len)) == RES_OK)
+        bima_connection_close(cn);
+
+    return r;
+}
+
+int32_t
 bima_write_descriptor(conn_t *cn, int32_t dscr, size_t dscr_size)
 {
     if (!cn || cn->id < 0)
         return RES_FAIL;
-
-    /* todo config aio */
-
-    // if (dscr_size)
-//    char buf[4096];
-//    for (int i = 0; i < 4096; i++)
-//        buf[i] = 'A';
-//
-//
-//    return bima_aio_write(cn->fd, buf, 4096, cn);
-
 
     off_t offset = 0;
     while (offset < dscr_size)
     {
         if (sendfile(cn->fd, dscr, &offset, dscr_size - offset) < 0)
         {
-            log_e("sendfile error to %d", dscr);
-            return RES_ERR;
+            log_e("sendfile error to %d %s", dscr, strerror(errno));
+            return RES_OK;
         }
     }
 

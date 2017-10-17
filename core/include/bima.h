@@ -80,6 +80,9 @@ bima_write_descriptor(conn_t *cn, int32_t dscr, size_t dscr_size);
 void
 bima_connection_close(conn_t *cn);
 
+int32_t
+bima_write_and_close(conn_t *cn, char *buf, size_t buf_len);
+
 #if defined(__cplusplus)
 } /* extern "C" */
 #endif

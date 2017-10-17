@@ -34,6 +34,8 @@
 #include <netdb.h>
 #include <unistd.h>
 
+#include<sys/mman.h>
+
 #define RES_OK      0
 #define RES_ERR     1
 #define RES_FAIL    2

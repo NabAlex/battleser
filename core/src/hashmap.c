@@ -3,12 +3,8 @@
  */
 #include "core.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
 #define INITIAL_SIZE (256)
-#define MAX_CHAIN_LENGTH (8)
+#define MAX_CHAIN_LENGTH (16)
 
 /* We need to keep keys and values */
 typedef struct _hashmap_element{

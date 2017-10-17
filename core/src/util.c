@@ -18,3 +18,13 @@ char *strnstr(const char *haystack, const char *needle, size_t len)
     }
     return NULL;
 }
+
+char *url_encode(char *buf, size_t buf_len)
+{
+    return NULL;
+}
+
+char *url_decode(char *buf, size_t buf_len)
+{
+    return NULL;
+}

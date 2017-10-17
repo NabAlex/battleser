@@ -142,9 +142,10 @@ bima_aio_get_next_robin()
 int32_t
 bima_aio_write(int cn_fd, char *buf, size_t buf_len, void *save_ptr)
 {
+#ifdef DEBUG
     if (buf_len >= 512 && buf_len % 512)
         log_w("wrong use aio");
-
+#endif
     bima_aio_context_t *current = bima_aio_get_next_robin();
     log_w("aio: choose %d", current->fd);
     xassert(current, "test!");
