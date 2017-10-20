@@ -82,6 +82,8 @@ http_parser(conn_t *cn)
     request->head.url = ptr;
     NEXT_CHR_AND_SET_NULL(ptr, ptr_end, ' ');
 
+    url_decode_me(request->head.url);
+
     request->head.http_version = ptr;
     NEXT_LINE_AND_SET_NULL(ptr, ptr_end);
 
