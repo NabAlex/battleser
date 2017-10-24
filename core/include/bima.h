@@ -3,6 +3,8 @@
 
 #define MOD_BIMA "[BIMA] "
 
+#define CHAIN_SIZE          1 KiB
+
 #define BIMA_USE_SIMPLE  0s
 #define BIMA_USE_THREADS (1 << 0)
 
@@ -38,17 +40,18 @@ typedef struct conn
 
     bima_epoll_data_t *epoll_ptr;
 
-    char *out;
-    ssize_t out_len;
-
     void *lib_space;
     client_t client_info;
 
-    char *add_buf;
-    ssize_t add_buf_len;
+    map_t store_map;
+
+    bchain root;
+
+    bchain in;
+    size_t in_len;
 } conn_t;
 
-typedef int32_t (*reader_callback)(conn_t *cn, const char *buf, uint32_t buf_len);
+typedef int32_t (*reader_callback)(conn_t *cn, bchain chain);
 typedef int32_t (*response_callback)(conn_t *cn);
 
 #if defined(__cplusplus)
@@ -56,7 +59,7 @@ extern "C" {
 #endif
 
 int
-bima_init(response_callback callback);
+bima_init(response_callback callback, char *port);
 
 void
 bima_set_reader(reader_callback _reader);

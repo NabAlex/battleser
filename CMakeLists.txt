@@ -18,6 +18,10 @@ ADD_PROJECT(core)
 set(TARGET_PROJECT battleser)
 add_definitions(-D_NEED_BATTLESER_MAIN_=1)
 
+set(_MODULE_NAME_ "battleser")
+
+configure_file(generate/generated.h.in ${CMAKE_SOURCE_DIR}/core/include/generated.h @ONLY )
+
 ADD_PROJECT(${TARGET_PROJECT})
 
 include_directories(${TARGET_PROJECT})

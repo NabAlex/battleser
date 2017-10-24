@@ -34,7 +34,11 @@
 #include <netdb.h>
 #include <unistd.h>
 
-#include<sys/mman.h>
+#include <sys/mman.h>
+
+/* auto generator */
+#include "generated.h"
+/******************/
 
 #define RES_OK      0
 #define RES_ERR     1
@@ -45,8 +49,10 @@
 #include "hashmap.h"
 #include "mem.h"
 #include "log.h"
-#include "bima_alloca.h"
+#include "bima_chain.h"
 /*** local std ***/
+
+#include "config.h"
 
 #include "bima_aio.h"
 

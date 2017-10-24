@@ -1,0 +1,1 @@
+#cmakedefine _MODULE_NAME_ "@_MODULE_NAME_@"

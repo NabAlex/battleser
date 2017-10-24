@@ -279,6 +279,13 @@ int hashmap_put(map_t in, char* key, any_t value){
     return MAP_OK;
 }
 
+int hashmap_put_with_prefix(map_t in, char *prefix, char *key, any_t value)
+{
+    static char buf[512];
+    assert(snprintf(buf, sizeof(buf), "%s->%s", prefix, key) > 0);
+    return hashmap_put(in, buf, value);
+}
+
 /*
  * Get your pointer out of the hashmap with a key
  */

@@ -18,5 +18,7 @@ add_library(core src/bima.c
                  src/hashmap.c
                  src/bima_type/http_response.c
                  src/bima_type/http_static.c
-        src/bima_aio.c
-                 src/util.c)
+                 src/bima_aio.c
+                 src/util.c
+                 src/bima_chain.c
+                 src/config.c)

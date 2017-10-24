@@ -3,8 +3,11 @@
 static reader_callback reader_handler;
 static response_callback main_handler;
 
-#define MAX_EVENTS  65535
-#define MAX_CLIENTS 65535
+#define MAX_CHAIN_EVENTS    10000
+
+#define MAX_EVENTS          65535
+#define MAX_CLIENTS         65535
+
 conn_t *connections;
 
 static int cored = -1;
@@ -25,6 +28,7 @@ init_connections()
     for (int32_t i = 0; i < MAX_CLIENTS; i++)
     {
         connections[i].id = CONNECT_UNUSED;
+        connections[i].store_map = hashmap_new();
     }
 }
 
@@ -37,6 +41,8 @@ get_connection(int index)
 static void
 bima_release_connection(void)
 {
+    config_release(bima_config_self());
+
     for (int32_t id = 0; id < MAX_CLIENTS; id++)
     {
         if (connections[id].id == id)
@@ -44,6 +50,9 @@ bima_release_connection(void)
             log_d("close connection %d", id);
             close(id);
         }
+
+        /* TODO remove stored map */
+        hashmap_free(connections->store_map);
     }
 
     log_w(MOD_BIMA" release connections and epoll");
@@ -265,15 +274,17 @@ bima_add_aio_context(bima_aio_context_t *aio)
 }
 
 int
-bima_init(response_callback callback)
+bima_init(response_callback callback, char *port)
 {
     int32_t r;
+
+    bima_config_init();
 
     init_connections();
     main_handler = callback;
     reader_handler = NULL;
 
-    if((cored = bind_epoll("3000")) < 0)
+    if((cored = bind_epoll(port)) < 0)
         goto error;
 
     if(set_socket_non_block(cored) < 0)
@@ -281,6 +292,8 @@ bima_init(response_callback callback)
 
     r = listen(cored, SOMAXCONN);
     assert(r != -1);
+
+    // fork();
 
     epoll_fd = epoll_create1(0);
     if(epoll_fd == -1)
@@ -297,6 +310,11 @@ bima_init(response_callback callback)
         log_e("cannot init aio");
         goto error;
     }
+
+    /* alloc bima memory */
+    bima_chain_alloca_init(MAX_CHAIN_EVENTS, CHAIN_SIZE);
+    log_w("Finish init");
+
     return RES_OK;
 error:
     return RES_ERR;
@@ -374,9 +392,9 @@ bima_main_loop()
                 /* disconnect */
                 /**************/
                 log_d("disconnect %d", cn->fd);
-                if (reader_handler && cn->add_buf && cn->add_buf_len)
+                if (reader_handler && cn->root)
                 {
-                    res = reader_handler(cn, cn->add_buf, cn->add_buf_len);
+                    res = reader_handler(cn, cn->root);
                     if (res == RES_OK)
                     {
                         cn->id = CONNECT_UNUSED;
@@ -397,19 +415,26 @@ bima_main_loop()
             {
                 ssize_t r_len = 0;
 
-                char buf[512];
-                cn->out = buf;
-                cn->out_len = 0;
+                xassert(!cn->root || cn->in, "wtf?");
 
-                if (cn->add_buf && cn->add_buf_len)
+                if (!cn->root)
                 {
-                    xmemmove(cn->out, cn->add_buf, cn->add_buf_len);
-                    cn->out_len = cn->add_buf_len;
+                    cn->in = cn->root = bima_chain_add(NULL);
+                    cn->in_len = 0;
                 }
+
+                if (cn->in_len == CHAIN_SIZE)
+                {
+                    cn->in = bima_chain_add(cn->root);
+                    cn->in_len = 0;
+                }
+
+                char *buf       = cn->in->data;
+                size_t buf_len  = cn->in_len;
 
                 while (true)
                 {
-                    if ((r_len = read(cn->fd, buf + cn->out_len, sizeof(buf) - cn->out_len)) < 0)
+                    if ((r_len = read(cn->fd, buf + buf_len, CHAIN_SIZE - buf_len)) < 0)
                     {
                         /* TODO check read full */
                         if (errno == EWOULDBLOCK)
@@ -419,6 +444,7 @@ bima_main_loop()
                             continue;
 
                         /* strange error */
+                        log_e("strange error");
                         bima_connection_close(cn);
                         break;
                     }
@@ -429,45 +455,31 @@ bima_main_loop()
                         continue;
                     }
 
-                    cn->out_len += r_len;
+                    buf_len += r_len;
+
+                    /* read all buffer */
+                    // !!! if (buf_len == CHAIN_SIZE) break;
                 }
 
-                if (cn->out_len <= 0)
+                /* todo check reader_handler */
+                if (cn->id == CONNECT_DONE || buf_len <= 0 || buf_len == CHAIN_SIZE)
                     continue;
+
+                cn->in_len = buf_len;
 
                 if (reader_handler)
                 {
-                    res = reader_handler(cn, cn->out, cn->out_len);
+                    res = reader_handler(cn, cn->root);
                     if (res == RES_AGAIN)
-                    {
-                        if (!cn->add_buf)
-                            cn->add_buf = malloc(cn->out_len);
-                        else
-                            cn->add_buf = realloc(cn->add_buf, cn->add_buf_len + cn->out_len);
-
-                        xmemmove(cn->add_buf + cn->add_buf_len, cn->out, cn->out_len);
-                        cn->add_buf_len += cn->out_len;
                         continue;
-                    }
 
                     if (res != RES_OK)
                     {
                         bima_connection_close(cn);
                         continue;
                     }
-
-                    /* TODO normal buf :( */
-                    free(cn->add_buf);
-
-                    cn->out = xmemdup(cn->out, cn->out_len);
                 }
 
-                /* TODO (a.naberezhnyi) check http */
-
-                /* kill me! ab -n 10000 -c 10 -r http://127.0.0.1:3000/ */
-                /* TODO (a.naberezhnyi) too slow new object */
-
-                /* TODO need event_id use epollet? */
                 bima_change_event(cn->fd, EPOLLOUT | EPOLLET);
             }
             else
@@ -477,7 +489,10 @@ bima_main_loop()
                 if (res == RES_OK)
                     log_d("RES_OK");
                 else
+                {
+                    bima_connection_close(cn);
                     log_d("RES_ERR");
+                }
             }
         }
     }
@@ -537,17 +552,10 @@ bima_connection_close(conn_t *cn)
     close(cn->fd);
     cn->id = CONNECT_DONE;
 
-    cn->out = NULL;
-    cn->out_len = 0;
-
-
-    free(cn->out);
-    cn->out = NULL;
-    cn->out_len = 0;
-
-    free(cn->add_buf);
-    cn->add_buf = NULL;
-    cn->add_buf_len = 0;
+    bima_chain_release(cn->root);
+    cn->root = NULL;
+    cn->in = NULL;
+    cn->in_len = 0;
 
     // shutdown(cn->fd, SHUT_RDWR);
 }

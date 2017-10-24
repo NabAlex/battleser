@@ -2,29 +2,6 @@
 
 http_callback http_local_callback;
 
-http_request_t *
-http_response_init()
-{
-    http_request_t *request = xmalloc( sizeof(http_header_t) );
-    memset(request, 0, sizeof(http_header_t));
-    request->head.headers = hashmap_new();
-    return request;
-}
-
-void
-http_response_release(http_request_t *response)
-{
-    if (!response)
-        return;
-
-    /* TODO body release */
-    int32_t map_len = hashmap_length(response->head.headers);
-
-    // TODO pls delete element from map
-    hashmap_free(response->head.headers);
-    free(response);
-}
-
 enum http_state_impl { PARSE_URL, PARSE_HEADERS, PARSE_BODY };
 typedef struct http_struct_impl
 {
@@ -67,24 +44,23 @@ static int32_t
 http_parser(conn_t *cn)
 {
     int32_t res = RES_OK;
-    if (!cn || !cn->out_len)
+    if (!cn || !cn->root)
         return RES_ERR;
-    assert(cn->out);
 
-    http_request_t *request = http_response_init();
+    static http_request_t request;
 
-    char *ptr = cn->out;
-    char *ptr_end = cn->out + cn->out_len;
+    char *ptr = cn->root->data;
+    char *ptr_end = ptr + cn->in_len;
 
-    request->head.type = cn->out;
+    request.head.type = ptr;
     NEXT_CHR_AND_SET_NULL(ptr, ptr_end, ' ');
 
-    request->head.url = ptr;
+    request.head.url = ptr;
     NEXT_CHR_AND_SET_NULL(ptr, ptr_end, ' ');
 
-    url_decode_me(request->head.url);
+    url_decode_me(request.head.url);
 
-    request->head.http_version = ptr;
+    request.head.http_version = ptr;
     NEXT_LINE_AND_SET_NULL(ptr, ptr_end);
 
     NEXT_LINE(ptr, ptr_end);
@@ -111,34 +87,35 @@ http_parser(conn_t *cn)
         do
             *tmp = toupper(*tmp);
         while (*(++tmp));
-        hashmap_put(request->head.headers, key, value);
+
+        hashmap_put_with_prefix(cn->store_map, "HEAD", key, value);
 
         NEXT_LINE(ptr, ptr_end);
         if (!ptr || IS_NEWLINE(ptr, ptr_end))
             break;
     }
 
-    request->body = ptr;
-    request->body_len = (cn->out + cn->out_len) - ptr;
+    request.body = ptr;
+    request.body_len = ptr_end - ptr;
 out:
     if (res != RES_OK)
         return RES_ERR;
 
-    return http_local_callback(cn, request);
+    return http_local_callback(cn, &request);
 }
 
 int32_t
-http_reader(conn_t *cn, const char *buf, uint32_t buf_len)
+http_reader(conn_t *cn, bchain chain)
 {
-    return (strnstr(buf, "\r\n\r\n", buf_len)) ? RES_OK : RES_AGAIN;
+    return (strnstr(chain->data, "\r\n\r\n", CHAIN_SIZE)) ? RES_OK : RES_AGAIN;
 }
 
 void
-http_start_server(http_callback callback)
+http_start_server(http_callback callback, char *port)
 {
     http_local_callback = callback;
 
-    bima_init(http_parser);
+    bima_init(http_parser, port);
     bima_set_reader(http_reader);
     bima_main_loop();
 }

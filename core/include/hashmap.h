@@ -47,6 +47,8 @@ extern map_t hashmap_new();
  */
 extern int hashmap_iterate(map_t in, PFany f, any_t item);
 
+int hashmap_put_with_prefix(map_t in, char *prefix, char *key, any_t value);
+
 /*
  * Add an element to the hashmap. Return MAP_OK or MAP_OMEM.
  */

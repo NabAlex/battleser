@@ -94,7 +94,11 @@ read_parser(conn_t *cn, http_request_t *request)
         *query = '\0';
     }
 
-    if (strcmp(request->head.type, "GET") || strstr(file, ".."))
+    /* bad practices */
+    if (strstr(file, ".."))
+        return http_send_data(cn, HTTP_METHOD_NOT_ALLOWED, STRSZ("Method not allowed"));
+
+    if (strcmp(request->head.type, "GET"))
         return http_send_data(cn, HTTP_METHOD_NOT_ALLOWED, STRSZ("Method not allowed"));
 
     file_info_t *info = NULL;
@@ -225,8 +229,8 @@ http_start_static_server(char *filedir, char *default_file)
 
     desc_array = calloc(MAX_FILES, sizeof(*desc_array));
 
-    http_static_loader(filedir, "");
+//    http_static_loader(filedir, "");
 
-    log_w("start server: %s", dir);
-    http_start_server(read_parser);
+    log_w("start server: %s:3000", dir);
+    http_start_server(read_parser, "3000");
 }
