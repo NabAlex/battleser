@@ -8,6 +8,8 @@ static response_callback main_handler;
 #define MAX_EVENTS          65535
 #define MAX_CLIENTS         65535
 
+static int32_t unique_id = -1;
+
 conn_t *connections;
 
 static int cored = -1;
@@ -35,27 +37,25 @@ init_connections()
 static inline conn_t *
 get_connection(int index)
 {
-    return &connections[index];
+    conn_t *cn = &connections[index];
+    cn->fd = index;
+    return cn;
 }
 
 static void
 bima_release_connection(void)
 {
-    config_release(bima_config_self());
-
-    for (int32_t id = 0; id < MAX_CLIENTS; id++)
+    log_w(MOD_BIMA" release connections and epoll");
+    for (int32_t fd = 0; fd < MAX_CLIENTS; fd++)
     {
-        if (connections[id].id == id)
-        {
-            log_d("close connection %d", id);
-            close(id);
-        }
+        conn_t *cn = get_connection(fd);
+        if (cn->id != CONNECT_DONE && cn->id != CONNECT_UNUSED)
+            bima_connection_close(cn);
 
         /* TODO remove stored map */
-        hashmap_free(connections->store_map);
+        hashmap_free(cn->store_map);
     }
 
-    log_w(MOD_BIMA" release connections and epoll");
     free(events);
     free(connections);
     /* normal close socket !!! */
@@ -84,12 +84,13 @@ bima_catch_exit()
 }
 
 static int
-bind_epoll(char *port)
+bind_epoll(const char *port)
 {
     struct addrinfo hints;
     struct addrinfo *result, *rp;
     int s, sfd = -1;
-    
+
+    log_w("Try listen %s", port);
     memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -138,22 +139,35 @@ bima_add_event(int _fd, uint32_t events)
     return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, _fd, &event);
 }
 
-static int
+int32_t
 bima_add_event_with_ptr(int _fd, uint32_t events, bima_epoll_type_t type, void *ptr)
 {
     static struct epoll_event event = {};
     event.data.fd = _fd;
     event.events = events;
 
-    bima_epoll_data_t *data = calloc(1, sizeof(*data));
-    data->type = type;
-    data->alloc_ptr = ptr;
-
-    connections[_fd].epoll_ptr = data;
-    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, _fd, &event);
+    conn_t *cn = get_connection(_fd);
+    cn->type = type;
+    cn->ptr = ptr;
+    cn->id = ++unique_id;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cn->fd, &event);
 }
 
-int
+int32_t
+bima_remove_event_with_ptr(int _fd)
+{
+    static struct epoll_event event;
+    event.data.fd = 0;
+    event.events = NULL;
+
+    conn_t *cn = get_connection(_fd);
+    cn->type = BIMA_USER;
+    cn->ptr = NULL;
+    cn->id = CONNECT_DONE;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_DEL, _fd, &event);
+}
+
+static int32_t
 bima_remove_event(int _fd)
 {
     static struct epoll_event event;
@@ -162,7 +176,7 @@ bima_remove_event(int _fd)
     return epoll_ctl(epoll_fd, EPOLL_CTL_DEL, _fd, &event);
 }
 
-int
+static int
 bima_change_event(int _fd, uint32_t events)
 {
     static struct epoll_event event;
@@ -258,9 +272,8 @@ bima_connection_accept(struct epoll_event *ev)
 
         conn_t *cn = get_connection(infd);
 
-        static int32_t unique_id = -1;
         cn->id = ++unique_id;
-        cn->fd = infd;
+        cn->type = BIMA_USER;
         cn->client_info.uaddr = in_addr;
     }
 
@@ -274,17 +287,15 @@ bima_add_aio_context(bima_aio_context_t *aio)
 }
 
 int
-bima_init(response_callback callback, char *port)
+bima_init(response_callback callback)
 {
     int32_t r;
-
-    bima_config_init();
 
     init_connections();
     main_handler = callback;
     reader_handler = NULL;
 
-    if((cored = bind_epoll(port)) < 0)
+    if((cored = bind_epoll(bima_config_str("bima_bind", "3000"))) < 0)
         goto error;
 
     if(set_socket_non_block(cored) < 0)
@@ -293,7 +304,13 @@ bima_init(response_callback callback, char *port)
     r = listen(cored, SOMAXCONN);
     assert(r != -1);
 
-    // fork();
+    bima_catch_exit();
+
+    /* alloc bima memory before fork !!! */
+    bima_chain_alloca_init(MAX_CHAIN_EVENTS, CHAIN_SIZE);
+    timer_init();
+
+    bima_fork_init(bima_config_int("fork_limit", 4));
 
     epoll_fd = epoll_create1(0);
     if(epoll_fd == -1)
@@ -311,10 +328,8 @@ bima_init(response_callback callback, char *port)
         goto error;
     }
 
-    /* alloc bima memory */
-    bima_chain_alloca_init(MAX_CHAIN_EVENTS, CHAIN_SIZE);
-    log_w("Finish init");
-
+    if (!bima_fork_is_main())
+        bima_main_loop();
     return RES_OK;
 error:
     return RES_ERR;
@@ -328,10 +343,8 @@ bima_main_loop()
     int32_t count_clients;
     events = calloc(MAX_EVENTS, sizeof(struct epoll_event));
 
-    bima_catch_exit();
-
     /* TODO (a.naberezhnyi) EPOLLONESHOT */
-    log_d(MOD_BIMA": START SERVER!");
+    log_d(MOD_BIMA": START FORK %d", bima_fork_id());
     while(1)
     {
         count_clients = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
@@ -360,12 +373,11 @@ bima_main_loop()
                 continue;
             }
 
-            if (cn->epoll_ptr != NULL)
+            if (cn->type != BIMA_USER)
             {
-                bima_epoll_data_t *data = cn->epoll_ptr;
-                if (data->type == BIMA_AIO_CTX)
+                if (cn->type == BIMA_AIO_CTX)
                 {
-                    bima_aio_context_t *aio = data->alloc_ptr;
+                    bima_aio_context_t *aio = cn->ptr;
 
                     struct io_event *aio_events = NULL;
                     int32_t r = bima_aio_get_events(aio, &aio_events);
@@ -378,9 +390,14 @@ bima_main_loop()
                             bima_connection_close((conn_t *) aio_events[i].data);
                     }
                     else
-                    {
                         log_e("wrong EPOLLIN with aio!");
-                    }
+                }
+                else if (cn->type == BIMA_TIMER)
+                {
+                    timer_data_t *td = cn->ptr;
+                    td->handler(td->data);
+                    assert(bima_remove_event_with_ptr(cn->fd) == RES_OK);
+                    td->active = false;
                 }
                 continue;
             }
@@ -556,6 +573,12 @@ bima_connection_close(conn_t *cn)
     cn->root = NULL;
     cn->in = NULL;
     cn->in_len = 0;
+
+    cn->type = BIMA_USER;
+    cn->ptr = NULL;
+
+    // TODO hashmap remove
+    // method clear
 
     // shutdown(cn->fd, SHUT_RDWR);
 }

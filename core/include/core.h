@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include <sys/mman.h>
+#include <sys/timerfd.h>
 
 /* auto generator */
 #include "generated.h"
@@ -54,9 +55,12 @@
 
 #include "config.h"
 
+#include "bima_forker.h"
 #include "bima_aio.h"
 
 #include "bima.h"
+
+#include "bima_timer.h"
 
 #include "bima_type/http.h"
 #include "bima_type/http_response.h"

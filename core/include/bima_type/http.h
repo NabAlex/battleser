@@ -26,6 +26,6 @@ typedef struct http_response
 typedef int32_t (*http_callback)(conn_t *cn, http_request_t *response);
 
 void
-http_start_server(http_callback callback, char *port);
+http_start_server(http_callback callback);
 
 #endif //MAIN_HTTP_H

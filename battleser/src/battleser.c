@@ -1,7 +1,5 @@
 #include "core.h"
 
-#ifdef _NEED_BATTLESER_MAIN_
-
 static int32_t
 print_usage()
 {
@@ -9,7 +7,9 @@ print_usage()
     return 0;
 }
 
-int
+#ifdef _NEED_BATTLESER_MAIN_
+
+int32_t
 main(int argc, char **argv)
 {
     const unsigned int NEED_PARAMS = 2;

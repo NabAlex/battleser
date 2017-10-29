@@ -67,13 +67,27 @@ http_static_extentions()
 }
 
 void
+http_static_closer(any_t *ignore, file_info_t *info)
+{
+    switch (info->type)
+    {
+        case USE_DESC:
+            close(info->desc);
+        case USE_MMAP:
+            munmap(info->ptr, info->size);
+    }
+}
+
+void
 http_static_release(void)
 {
     log_w("delete static dir");
     free(dir);
     free(dfile);
     free(desc_array);
-    /* todo remove hashmap */
+
+    hashmap_iterate(descriptors, (PFany) http_static_closer, NULL);
+    hashmap_free(descriptors);
 }
 
 static int32_t
@@ -229,8 +243,8 @@ http_start_static_server(char *filedir, char *default_file)
 
     desc_array = calloc(MAX_FILES, sizeof(*desc_array));
 
-//    http_static_loader(filedir, "");
+    http_static_loader(filedir, "");
 
     log_w("start server: %s:3000", dir);
-    http_start_server(read_parser, "3000");
+    http_start_server(read_parser);
 }

@@ -1,6 +1,6 @@
 #include "core.h"
 
-#define BIMA_AIO_POLL_SIZE 30
+#define BIMA_AIO_POLL_SIZE 10
 
 #define NUM_EVENTS 128
 
@@ -77,9 +77,7 @@ bima_aio_init(int32_t (*aio_attach_context)(bima_aio_context_t *ctx))
     atexit(bima_aio_close);
     return RES_OK;
 err:
-    for (int32_t i = 0; i < BIMA_AIO_POLL_SIZE; i++)
-        bima_aio_context_release(aio_poll_context[i]);
-    free(aio_poll_context);
+    bima_aio_close();
     return RES_ERR;
 }
 
@@ -147,7 +145,7 @@ bima_aio_write(int cn_fd, char *buf, size_t buf_len, void *save_ptr)
         log_w("wrong use aio");
 #endif
     bima_aio_context_t *current = bima_aio_get_next_robin();
-    log_w("aio: choose %d", current->fd);
+    log_d("aio: choose %d", current->fd);
     xassert(current, "test!");
 
     int32_t r;

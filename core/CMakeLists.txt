@@ -11,7 +11,8 @@ else (LIBAIO_FOUND)
     message(WARNING "cannot find libaio")
 endif (LIBAIO_FOUND)
 
-add_library(core src/bima.c
+add_library(core
+        src/bima.c
                  src/log.c
                  src/mem.c
                  src/bima_type/http.c
@@ -21,4 +22,6 @@ add_library(core src/bima.c
                  src/bima_aio.c
                  src/util.c
                  src/bima_chain.c
-                 src/config.c)
+                 src/config.c
+                 src/bima_forker.c
+                 src/bima_timer.c)

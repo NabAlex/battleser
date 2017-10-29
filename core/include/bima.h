@@ -21,24 +21,25 @@ typedef int32_t (*read_parser_t)(string_t stream);
 
 typedef enum bima_epoll_type
 {
-    BIMA_AIO_CTX
+    BIMA_USER,
+    BIMA_AIO_CTX,
+    BIMA_TIMER,
 } bima_epoll_type_t;
-
-typedef struct bima_epoll_data
-{
-    bima_epoll_type_t type;
-    void *alloc_ptr;
-} bima_epoll_data_t;
 
 typedef struct conn
 {
     /**
      *  id ~            unique id
      */
-    int32_t id;
-    int32_t fd;
+    bima_epoll_type_t type;
+    void *ptr;
 
-    bima_epoll_data_t *epoll_ptr;
+    int32_t id;
+
+    /**
+     * set value if get_connection
+     */
+    int32_t fd;
 
     void *lib_space;
     client_t client_info;
@@ -59,20 +60,22 @@ extern "C" {
 #endif
 
 int
-bima_init(response_callback callback, char *port);
+bima_init(response_callback callback);
+
+/* enter in epoll */
+void
+bima_main_loop();
 
 void
 bima_set_reader(reader_callback _reader);
 
-void
-bima_main_loop();
+int32_t
+bima_write_and_close(conn_t *cn, char *buf, size_t buf_len);
 
-static int
-bima_add_event(int _fd, uint32_t events);
 int
-bima_remove_event(int _fd);
-int
-bima_change_event(int _fd, uint32_t events);
+bima_add_event_with_ptr(int _fd, uint32_t events, bima_epoll_type_t type, void *ptr);
+int32_t
+bima_remove_event_with_ptr(int _fd);
 
 int32_t
 bima_write(conn_t *cn, char *buf, size_t buf_len);
@@ -82,9 +85,6 @@ bima_write_descriptor(conn_t *cn, int32_t dscr, size_t dscr_size);
 
 void
 bima_connection_close(conn_t *cn);
-
-int32_t
-bima_write_and_close(conn_t *cn, char *buf, size_t buf_len);
 
 #if defined(__cplusplus)
 } /* extern "C" */

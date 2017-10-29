@@ -57,6 +57,9 @@ bima_chain_add(bima_chain_t *root)
 void
 bima_chain_release(bima_chain_t *chain)
 {
+    if (!chain)
+        return;
+
     bima_chain_t *tmp;
     while (chain)
     {
@@ -75,11 +78,13 @@ bima_chain_alloca_init(size_t count, size_t default_size)
     start_memory = sbrk(0);
     void *cursor = start_memory;
 
+    size_t sc = sizeof(bima_chain_t) + default_size;
+    end_memory = sbrk(sc * count);
+    // TODO check end_memory
+
     memmap = calloc(count, sizeof(*memmap));
     for (int32_t i = 0; i < count; ++i)
     {
-        size_t sc = sizeof(bima_chain_t) + default_size;
-        sbrk(sc);
         memset(cursor, 0, sc);
 
         memmap[i] = cursor;
@@ -87,7 +92,6 @@ bima_chain_alloca_init(size_t count, size_t default_size)
         cursor += sc;
     }
 
-    end_memory = cursor;
     chain_count = count;
     robin_cursor = 0;
 }

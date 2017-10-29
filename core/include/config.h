@@ -22,12 +22,12 @@ config_t *
 bima_config_self();
 
 int32_t
-bima_config_int();
+bima_config_int(char *name, int32_t default_);
 
 const char *
-bima_config_str();
+bima_config_str(char *name, char *default_);
 
-int32_t
+long
 config_int(config_t *cfg);
 
 const char *
