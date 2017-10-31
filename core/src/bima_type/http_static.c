@@ -15,6 +15,9 @@ typedef struct file_info
 
     char *file_type;
     ssize_t size;
+
+    /* stat */
+    int32_t errors;
 } file_info_t;
 
 static char __buf[512];
@@ -93,42 +96,53 @@ http_static_release(void)
 static int32_t
 read_parser(conn_t *cn, http_request_t *request)
 {
-    char *file;
+    if (strcmp(request->head.type, "HEAD") && strcmp(request->head.type, "GET"))
+        return http_send_data(cn, HTTP_METHOD_NOT_ALLOWED, STRSZ("Method not allowed"));
 
-    /* TODO normal path !!! */
-    file = request->head.url + 1;
-    if (!*file)
-        file = dfile;
+    bool index_html = false;
+    char *filename;
+    size_t filename_len = 0;
 
-    log_d("%s", file);
+    filename = request->head.url + 1;
+    if (!*filename)
+        filename = dfile;
 
-    char *query;
-    if ((query = strstr(file, "?")) != NULL)
+    char *url_end;
+    if ((url_end = strstr(filename, "?")) != NULL)
+        *url_end = '\0';
+    else
+        url_end = filename + strlen(filename);
+
+    filename_len = url_end - filename;
+
+    if (*(url_end - 1) == '/')
     {
-        *query = '\0';
+        __buf_len = snprintf(__buf, sizeof(__buf), "%s%s",
+            filename,
+            dfile);
+        assert(__buf_len > 0);
+        filename = __buf;
+        filename_len = __buf_len;
+        index_html = true;
     }
 
-    /* bad practices */
-    if (strstr(file, ".."))
-        return http_send_data(cn, HTTP_METHOD_NOT_ALLOWED, STRSZ("Method not allowed"));
-
-    if (strcmp(request->head.type, "GET"))
-        return http_send_data(cn, HTTP_METHOD_NOT_ALLOWED, STRSZ("Method not allowed"));
+    filename = (char *) normalize_directory(filename, filename_len);
+    log_d("%s", filename);
 
     file_info_t *info = NULL;
-    int32_t r = hashmap_get(descriptors, file, &info);
+    int32_t r = hashmap_get(descriptors, filename, &info);
     if (r != MAP_OK)
-        return http_send_data(cn, HTTP_NOTFOUND, STRSZ("Not found"));
+        return http_send_data(cn, (!index_html) ? HTTP_NOTFOUND : HTTP_FORBIDDEN, STRSZ("Not found"));
 
 
     __buf_len = snprintf(__buf, sizeof(__buf),
-            "%s %d %s\r\n"
+        "%s %d %s\r\n"
             "Server: bima\r\n"
             "Content-Length: %lu\r\n"
             "Content-Type: %s\r\n\r\n",
-            request->head.http_version,
-            HTTP_OK, http_response_get_status_name(HTTP_OK),
-            info->size, info->file_type);
+        request->head.http_version,
+        HTTP_OK, http_response_get_status_name(HTTP_OK),
+        info->size, info->file_type);
 
     xassert(bima_write(cn, __buf, __buf_len) == RES_OK, "cannot write in socket");
 
@@ -139,12 +153,32 @@ read_parser(conn_t *cn, http_request_t *request)
     };
 
     if (info->type == USE_MMAP)
-        return bima_aio_write(cn->fd, info->ptr, info->size, cn);
+    {
+        if ((r = bima_aio_write(cn->fd, info->ptr, info->size, cn)) != RES_OK)
+            info->errors++;
 
-    if (http_send_file(cn, HTTP_OK, info->desc, info->size) != RES_OK)
-        return RES_ERR;
+        return r;
+    }
 
-    return RES_OK;
+    if (info->type == USE_DESC)
+    {
+        if ((r = http_send_file(cn, HTTP_OK, info->desc, info->size)) != RES_OK)
+            info->errors++;
+
+        return r;
+    }
+
+    xassert(0, "wrong static answer");
+    return RES_ERR;
+}
+
+static void
+http_static_timer_check(file_info_t *info)
+{
+    xassert(info->errors == 0, "file error");
+    timer_add(info,
+            (timer_handler_t) http_static_timer_check,
+            3 SECONDS);
 }
 
 static void
@@ -221,6 +255,11 @@ http_static_loader(char *filedir, char *addition)
         }
         desc_array[desc_cur].size = stat_buf.st_size;
 
+#ifdef DEBUG
+        timer_add(&desc_array[desc_cur],
+                (timer_handler_t) http_static_timer_check,
+                rand() % 4 SECONDS);
+#endif
         snprintf(__buf, sizeof(__buf), "%s/%s", addition, ep->d_name);
         log_w("to hash %s", __buf + 1);
         hashmap_put(descriptors, __buf + 1 /* TODO change */, desc_array + desc_cur);
@@ -233,6 +272,8 @@ http_static_loader(char *filedir, char *addition)
 void
 http_start_static_server(char *filedir, char *default_file)
 {
+    http_start_server(read_parser);
+
     atexit(http_static_release);
 
     dir = strdup(filedir);
@@ -244,7 +285,5 @@ http_start_static_server(char *filedir, char *default_file)
     desc_array = calloc(MAX_FILES, sizeof(*desc_array));
 
     http_static_loader(filedir, "");
-
     log_w("start server: %s:3000", dir);
-    http_start_server(read_parser);
 }

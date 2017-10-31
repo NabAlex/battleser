@@ -14,6 +14,8 @@ http_response_get_status_name(http_status_t st)
         return "ERR";
     case HTTP_FAIL:
         return "FAIL";
+    case HTTP_FORBIDDEN:
+        return "FORBIDDEN";
     case HTTP_NOTFOUND:
         return "NOT FOUND";
     case HTTP_METHOD_NOT_ALLOWED:

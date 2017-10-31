@@ -117,5 +117,4 @@ http_start_server(http_callback callback)
 
     bima_init(http_parser);
     bima_set_reader(http_reader);
-    bima_main_loop();
 }

@@ -5,6 +5,7 @@ typedef enum http_status
 {
     HTTP_OK                 = 200,
     HTTP_FAIL               = 400,
+    HTTP_FORBIDDEN          = 403,
     HTTP_NOTFOUND           = 404,
     HTTP_METHOD_NOT_ALLOWED = 405,
     HTTP_ERR                = 500

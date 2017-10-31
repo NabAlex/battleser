@@ -1,6 +1,6 @@
 #include "core.h"
 
-#define TIMER_INIT_COUNT 10
+#define TIMER_INIT_COUNT 200
 
 timer_data_t *timers;
 

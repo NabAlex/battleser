@@ -50,3 +50,39 @@ url_decode_me(char *me)
 
     *me = '\0';
 }
+
+const char *
+normalize_directory(char *dir, size_t dir_len)
+{
+    static char buf[1 KiB];
+    char *buf_end = buf + sizeof(buf);
+    int32_t buf_len = 0, lost_count = 0;
+
+    char *left_name = dir + dir_len, *right_name = dir + dir_len;
+
+#define ADD_STRING(str, len) do { memcpy(buf_end - buf_len - (len) - 1, (str), (len)); buf[sizeof(buf) - buf_len - 1] = '/'; buf_len += (len) + 1; } while(0)
+
+    do
+    {
+        while (--left_name >= dir && *left_name != '/');
+        if (left_name < dir)
+            left_name = dir - 1;
+
+        if (right_name == left_name)
+            ADD_STRING("/", 1);
+        else if (right_name - left_name == sizeof("..") && *(left_name + 1)== '.' && *(left_name + 2) == '.')
+            lost_count += 1;
+        else if (lost_count > 0)
+            lost_count -= 1;
+        else
+            ADD_STRING(left_name + 1, right_name - left_name - 1);
+
+        if (left_name <= dir)
+            break;
+
+        right_name = left_name;
+    } while (true);
+
+    buf[sizeof(buf) - 1] = '\0';
+    return buf_end - buf_len;
+}

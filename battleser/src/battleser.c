@@ -17,6 +17,7 @@ main(int argc, char **argv)
         return print_usage();
 
     http_start_static_server(argv[1], NULL);
+    bima_main_loop();
 }
 
 #endif
